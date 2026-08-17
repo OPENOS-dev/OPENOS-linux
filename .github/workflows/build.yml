@@ -1,0 +1,56 @@
+name: OPENOS binpkg build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86-64, x86, arm64, arm32, loong64]
+
+    env:
+      COMPONENT: linux
+      BINPKG_REPO: OPENOS-dev/OPENOS-BUILD-BINPKG
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建并打包 binpkg
+        run: |
+          set -euo pipefail
+          echo "linux 为 Arch 内核打包配方 (PKGBUILD/hook/config); 内核本体由 kernel 组件构建"
+          echo "本组件产物为打包配置文件归档"
+          WORK="$(mktemp -d)"
+          PKG="${COMPONENT}-${{ matrix.arch }}-DEV2026.1.pkg.tar.zst"
+          mkdir -p "$WORK/pkg/etc/openos/kernel-packaging"
+          cp -a PKGBUILD config.* keys hooks.install "$WORK/pkg/etc/openos/kernel-packaging/" 2>/dev/null || cp -a . "$WORK/pkg/etc/openos/kernel-packaging/"
+          tar --zstd -cf "$PKG" -C "$WORK/pkg" .
+          ls -la "$PKG"
+
+      - name: 推送 binpkg 到共享仓库
+        env:
+          BINPKG_TOKEN: ${{ secrets.OPENOS_BINPKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BINPKG_TOKEN" ]; then
+            echo "::warning::未配置 secrets.OPENOS_BINPKG_TOKEN，跳过推送"
+            exit 0
+          fi
+          ARCH="${{ matrix.arch }}"
+          PKG="${COMPONENT}-${ARCH}-DEV2026.1.pkg.tar.zst"
+          git clone --depth 1 "https://x-access-token:${BINPKG_TOKEN}@github.com/${BINPKG_REPO}.git" /tmp/binpkg-repo
+          cd /tmp/binpkg-repo
+          mkdir -p "bins/${COMPONENT}/${ARCH}"
+          cp -f "$GITHUB_WORKSPACE/${PKG}" "bins/${COMPONENT}/${ARCH}/"
+          git config user.name "OPENOS CI"
+          git config user.email "ci@openos.dev"
+          git add -A
+          git commit -m "binpkg: ${COMPONENT} ${ARCH} (${GITHUB_SHA:0:8})" || echo "no changes"
+          git push -q origin main
