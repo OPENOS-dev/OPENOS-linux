@@ -54,3 +54,38 @@ jobs:
           git add -A
           git commit -m "binpkg: ${COMPONENT} ${ARCH} (${GITHUB_SHA:0:8})" || echo "no changes"
           git push -q origin main
+
+      - name: 上报失败原因到共享仓库
+        if: failure()
+        env:
+          BINPKG_TOKEN: ${{ secrets.OPENOS_BINPKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BINPKG_TOKEN" ]; then
+            echo "::warning::未配置 OPENOS_BINPKG_TOKEN，跳过失败上报"
+            exit 0
+          fi
+          ARCH="${{ matrix.arch }}"
+          {
+            echo "# ${COMPONENT} 构建失败 (${ARCH})"
+            echo
+            echo "- 仓库: ${{ github.repository }}"
+            echo "- 运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "- 提交: ${{ github.sha }}"
+            echo "- 时间: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## 构建日志尾部"
+            echo '```'
+            tail -80 "$RUNNER_TEMP/build.log" 2>/dev/null || echo "(未捕获到日志)"
+            echo '```'
+          } > "$RUNNER_TEMP/fail.txt"
+          git clone --depth 1 "https://x-access-token:${BINPKG_TOKEN}@github.com/${BINPKG_REPO}.git" /tmp/binpkg-repo
+          cd /tmp/binpkg-repo
+          mkdir -p "logs/${COMPONENT}"
+          rm -f "$ARCH.log"
+          cp "$RUNNER_TEMP/fail.txt" "$ARCH.log"
+          git config user.name "OPENOS CI"
+          git config user.email "ci@openos.dev"
+          git add -A
+          git commit -m "fail-log: ${COMPONENT}/${ARCH} (${GITHUB_SHA:0:8})" || echo "no changes"
+          git push -q origin main
